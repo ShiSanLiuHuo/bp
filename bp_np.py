@@ -1,17 +1,14 @@
 # 基于numpy的BP网络
 
+import csv
 from pathlib import Path
-from typing import TypeAlias
 
 import matplotlib.pyplot as plt
-import pandas as pd
 import numpy as np
-from numpy.typing import NDArray
 
 np.random.seed(1)
 
-FloatArray: TypeAlias = NDArray[np.float64]
-Float32Array: TypeAlias = NDArray[np.float32]
+FloatArray = np.ndarray
 
 # 超参数设置
 # 最大训练轮数
@@ -33,12 +30,14 @@ datadixY = {'是': [1, 0], '否': [0, 1]}
 class DataLoad:
     def __init__(self, dpath: Path):
         # 读入数据集
-        self.data = pd.read_csv(dpath)
+        with dpath.open("r", encoding="utf-8", newline="") as csv_file:
+            reader = csv.DictReader(csv_file)
+            self.data = list(reader)
 
     # 根据字典将列表中的字符替换为数值，并转换为ndarray
-    def get_data(self) -> tuple[Float32Array, Float32Array]:
-        raw_x = self.data.iloc[:, 1:3].values.tolist()
-        raw_y = self.data.iloc[:, 3].values.tolist()
+    def get_data(self) -> tuple[FloatArray, FloatArray]:
+        raw_x = [[row["根蒂"], row["脐部"]] for row in self.data]
+        raw_y = [row["好瓜"] for row in self.data]
 
         data_x_list: list[list[float]] = []
         data_y_list: list[list[float]] = []
@@ -96,8 +95,8 @@ class BPModel:
         self.output_size = l_out
         self.learning_rate = eta
         self.errall = 1.0
-        self.input_data: Float32Array = np.empty((0, d_in), dtype=np.float32)
-        self.output_data: Float32Array = np.empty((0, l_out), dtype=np.float32)
+        self.input_data: FloatArray = np.empty((0, d_in), dtype=np.float32)
+        self.output_data: FloatArray = np.empty((0, l_out), dtype=np.float32)
         self.loss_history: list[float] = []
         
     def feedforward(self, x: FloatArray) -> FloatArray:
@@ -160,7 +159,7 @@ class BPModel:
 
         return sample_error
             
-    def set_data(self, input_data: Float32Array, output_data: Float32Array) -> None:
+    def set_data(self, input_data: FloatArray, output_data: FloatArray) -> None:
         self.input_data = np.array(input_data)
         self.output_data = np.array(output_data)
 
@@ -201,7 +200,9 @@ class BPModel:
 
 
 def save_loss_curve(loss_history: list[float], output_path: Path) -> None:
-    # 保存训练过程中的平均误差变化，便于观察收敛趋势。
+    if not loss_history:
+        return
+
     plt.figure(figsize=(8, 5))
     plt.plot(range(len(loss_history)), loss_history, color="tab:blue", linewidth=2)
     plt.xlabel("Epoch")
@@ -211,30 +212,33 @@ def save_loss_curve(loss_history: list[float], output_path: Path) -> None:
     plt.tight_layout()
     plt.savefig(output_path, dpi=150)
     plt.close()
-    
-# 可以根据下述参考代码编写上述的神经网络模型类
-data = DataLoad(datapath)
-dataX, dataY = data.get_data()
-# print(dataX)
-# print(dataY)
 
-model = BPModel(d_in=2, q_mid=2, l_out=2, eta=eta)
-model.set_data(dataX, dataY)
-for i in range(epoch):
-    w, v = model.train_one_epoch()
 
-    if i % 100 == 0:
-        print(i, '\n', w, '\n', v,'\n',model.errall)
-        print("-------------------------------\nepoch = ", i)
-    if model.errall < errlimit:
-        print("Done !")
-        print("i = ", i)
-        print("w = ", w)
-        print("v = ", v)
-        break
-else:
-    print("Training stopped without reaching errlimit.")
-    print("final err = ", model.errall)
+def main() -> None:
+    data = DataLoad(datapath)
+    dataX, dataY = data.get_data()
 
-save_loss_curve(model.loss_history, loss_plot_path)
-print("loss curve saved to", loss_plot_path)
+    model = BPModel(d_in=2, q_mid=2, l_out=2, eta=eta)
+    model.set_data(dataX, dataY)
+    for i in range(epoch):
+        w, v = model.train_one_epoch()
+
+        if i % 100 == 0:
+            print(i, '\n', w, '\n', v, '\n', model.errall)
+            print("-------------------------------\nepoch = ", i)
+        if model.errall < errlimit:
+            print("Done !")
+            print("i = ", i)
+            print("w = ", w)
+            print("v = ", v)
+            break
+    else:
+        print("Training stopped without reaching errlimit.")
+        print("final err = ", model.errall)
+
+    save_loss_curve(model.loss_history, loss_plot_path)
+    print("loss curve saved to", loss_plot_path)
+
+
+if __name__ == "__main__":
+    main()
