@@ -1,4 +1,6 @@
 # 基于numpy的BP网络
+# 这个实现对应一个三层前馈神经网络：输入层 -> 隐藏层 -> 输出层。
+# 训练时使用标准 BP（误差反向传播）算法，按样本逐个更新权重。
 
 import csv
 from pathlib import Path
@@ -21,9 +23,13 @@ errlimit = 0.001
 datapath = Path(__file__).with_name("watermelon_bp.csv")
 # loss 曲线输出路径
 loss_plot_path = Path(__file__).with_name("bp_loss_curve.png")
-# 建立数据集替换的字典，以便将中文转换成数值类型
+# 建立数据集替换字典，把离散中文属性编码成数值。
+# 这里采用的是最直接的人工编码方式，便于送入神经网络做数值计算。
 datadicX = {'蜷缩': 0, '稍蜷': 1, '硬挺': 2,
             '凹陷': 0, '稍凹': 1, '平坦': 2}
+# 输出采用 one-hot 编码：
+# “是” -> [1, 0]， “否” -> [0, 1]
+# 这样输出层两个神经元分别表示属于两类的程度。
 datadixY = {'是': [1, 0], '否': [0, 1]}
 
 # 数据集处理类
@@ -36,6 +42,7 @@ class DataLoad:
 
     # 根据字典将列表中的字符替换为数值，并转换为ndarray
     def get_data(self) -> tuple[FloatArray, FloatArray]:
+        # 从每一行中取出输入特征和标签。
         raw_x = [[row["根蒂"], row["脐部"]] for row in self.data]
         raw_y = [row["好瓜"] for row in self.data]
 
@@ -43,10 +50,12 @@ class DataLoad:
         data_y_list: list[list[float]] = []
 
         for row in raw_x:
+            # 把每个离散特征映射为浮点数，便于后续矩阵/向量计算。
             mapped_row = [float(datadicX[str(value)]) for value in row]
             data_x_list.append(mapped_row)
 
         for value in raw_y:
+            # 标签映射为 one-hot 向量，对应输出层两个节点的目标值。
             data_y_list.append([float(item) for item in datadixY[str(value)]])
 
         data_x = np.array(data_x_list, dtype=np.float32)
@@ -63,6 +72,7 @@ class Neuron:
         if israndom:
             # 随机初始化权重
             # 连接权在-2到2之间 阈值在0到2之间
+            # 随机初始化的目的是打破对称性，避免所有神经元学成完全一样
             self.weight = np.random.random(x_dimension) * 4 - 2
             self.weight = np.append(self.weight, np.random.random(1) * 2)
         else:
@@ -80,8 +90,10 @@ class Neuron:
         
     def output(self, x: FloatArray) -> float:
         # 追加一个固定输入 -1，用最后一位权重表示阈值项。
+        # 把“加阈值/减偏置”统一写成一次向量点积。
         x = np.append(x, [-1])
         x = np.array(x)
+        # 神经元输出 = sigmoid(加权输入和)
         y = sigmoid(np.sum(x * self.weight))
         return float(y)
     
@@ -100,10 +112,14 @@ class BPModel:
         self.loss_history: list[float] = []
         
     def feedforward(self, x: FloatArray) -> FloatArray:
+        # 前向传播分两步：
+        # 1. 输入层 -> 隐藏层，得到隐藏层输出 b
+        # 2. 隐藏层 -> 输出层，得到网络预测 y
         b = []
         for i in self.hidden_layer:
             b.append(i.output(x))
         b = np.array(b)
+
         y = []
         for i in self.output_layer:
             y.append(i.output(b))
@@ -111,7 +127,10 @@ class BPModel:
         return y
         
     def backpropagation(self, x: FloatArray, y: FloatArray) -> float:
-        # 正向传播
+        # 对单个样本执行一次“前向传播 + 反向传播 + 权重更新”。
+        # 这里是随机梯度下降（SGD）的写法，因为每次只用一个样本更新参数。
+
+        # 正向传播：先算隐藏层输出 b，再算最终预测 y_hat。
         b = []
         for i in self.hidden_layer:
             b.append(i.output(x))
@@ -122,27 +141,34 @@ class BPModel:
             y_hat.append(i.output(b))
         y_hat = np.array(y_hat)
         
-        # 计算误差
+        # 采用平方误差：E_k = 1/2 * sum((y - y_hat)^2)
         sample_error = np.sum((y - y_hat)**2) / 2
         
         # 反向传播
-        # 计算输出层的梯度项 g
+        # 输出层梯度项 g：
+        # g_j = y_hat_j * (1 - y_hat_j) * (y_j - y_hat_j)
+        # 前半部分来自 sigmoid 的导数，后半部分来自平方误差对输出的导数。
         g = y_hat * (1 - y_hat) * (y - y_hat)
         
-        # 在更新前保存输出层权重，供隐藏层梯度计算使用
+        # 在更新输出层之前，先保存旧权重。
+        # 原因是隐藏层误差项要用“输出层到隐藏层”的旧连接权来回传误差信号。
         w_output = np.zeros((self.output_size, self.hidden_size))
         for j in range(self.output_size):
             w_output[j, :] = self.output_layer[j].getWeight()[:-1]
 
-        # 更新输出层权重
+        # 更新输出层权重：
+        # Delta_w = eta * g_j * b
+        # 其中 b 是隐藏层输出，也就是输出层当前神经元的输入。
         for j in range(self.output_size):
             current_weight = self.output_layer[j].getWeight()
             input_to_output = np.append(b, [-1])
             updated_weight = current_weight + self.learning_rate * g[j] * input_to_output
             self.output_layer[j].setWeight(updated_weight)
         
-        # 计算隐藏层的梯度项 e
-        # 计算隐藏层误差项
+        # 隐藏层误差项 e_h：
+        # e_h = b_h * (1 - b_h) * sum(w_hj * g_j)
+        # 含义是：隐藏层节点 h 的误差，等于它对后续所有输出节点造成影响的总和，
+        # 再乘上它自身激活函数的导数。
         e = np.zeros(self.hidden_size)
         for h in range(self.hidden_size):
             sum_w_g = 0
@@ -150,7 +176,9 @@ class BPModel:
                 sum_w_g += w_output[j, h] * g[j]
             e[h] = b[h] * (1 - b[h]) * sum_w_g
         
-        # 更新隐藏层权重
+        # 更新隐藏层权重：
+        # Delta_v = eta * e_h * x
+        # 这里 x 是原始输入向量，因此隐藏层权重直接根据输入和隐藏层误差项调整。
         for h in range(self.hidden_size):
             current_weight = self.hidden_layer[h].getWeight()
             input_to_hidden = np.append(x, [-1])
@@ -160,10 +188,13 @@ class BPModel:
         return sample_error
             
     def set_data(self, input_data: FloatArray, output_data: FloatArray) -> None:
+        # 保存训练集，后续每一轮训练都会遍历这些样本。
         self.input_data = np.array(input_data)
         self.output_data = np.array(output_data)
 
     def compute_dataset_error(self) -> float:
+        # 计算整个训练集上的平均误差，用于观察整体收敛情况。
+        # 注意：它不参与本轮权重更新，只用于记录训练效果。
         total_error = 0.0
         for i in range(len(self.input_data)):
             y_hat = self.feedforward(self.input_data[i])
@@ -172,7 +203,8 @@ class BPModel:
 
     def train_one_epoch(self) -> tuple[FloatArray, FloatArray]:
         """完成一轮训练，并返回当前所有权重。"""
-        # 对每个样本进行反向传播
+        # 一个 epoch 表示把整个训练集完整训练一遍。
+        # 这里采用逐样本更新，所以同一轮中后面的样本会使用前面样本更新后的新权重。
         for i in range(len(self.input_data)):
             self.backpropagation(self.input_data[i], self.output_data[i])
 
@@ -180,7 +212,7 @@ class BPModel:
         self.errall = self.compute_dataset_error()
         self.loss_history.append(self.errall)
         
-        # 收集所有权重
+        # 收集所有权重，主要是为了训练过程中打印出来观察参数变化。
         self.w = []
         self.v = []
         
@@ -200,6 +232,8 @@ class BPModel:
 
 
 def save_loss_curve(loss_history: list[float], output_path: Path) -> None:
+    # 将每轮训练得到的平均误差画成曲线。
+    # 以及学习率是否可能过大或过小。
     if not loss_history:
         return
 
@@ -215,27 +249,36 @@ def save_loss_curve(loss_history: list[float], output_path: Path) -> None:
 
 
 def main() -> None:
+    # 读取并编码数据集
     data = DataLoad(datapath)
     dataX, dataY = data.get_data()
 
+    # 初始化 BP 网络结构
+    # 当前结构为 2-2-2：2 个输入节点，2 个隐藏层节点，2 个输出节点。
     model = BPModel(d_in=2, q_mid=2, l_out=2, eta=eta)
     model.set_data(dataX, dataY)
+
+    # 循环训练，直到达到最大轮数或误差降到阈值以下
     for i in range(epoch):
         w, v = model.train_one_epoch()
 
         if i % 100 == 0:
+            # 每隔 100 轮打印一次参数和误差，便于查看训练过程。
             print(i, '\n', w, '\n', v, '\n', model.errall)
             print("-------------------------------\nepoch = ", i)
         if model.errall < errlimit:
+            # 当整体误差低于设定阈值时，认为模型已经基本收敛。
             print("Done !")
             print("i = ", i)
             print("w = ", w)
             print("v = ", v)
             break
     else:
+        # 最大轮数时仍未满足误差要求。
         print("Training stopped without reaching errlimit.")
         print("final err = ", model.errall)
 
+    # 保存 loss 曲线
     save_loss_curve(model.loss_history, loss_plot_path)
     print("loss curve saved to", loss_plot_path)
 
